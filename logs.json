@@ -1,0 +1,2 @@
+{"user_id": "user_123", "endpoint": "/add", "method": "POST", "input": {"a": 5.0, "b": 5.0}, "output": {"result": 10.0}, "remaining_credits": 1, "timestamp": "2025-10-09T11:06:41.138700"}
+{"user_id": "user_123", "endpoint": "/add", "method": "POST", "input": {"a": 5.0, "b": 4.0}, "output": {"result": 9.0}, "remaining_credits": 9, "timestamp": "2025-10-09T11:07:37.059555"}

@@ -1,62 +1,65 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from fastapi import FastAPI, Request, HTTPException, Header
+from models import Numbers
+from database import USERS, USAGE, log_request, check_user, reset_daily_credits
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 app = FastAPI()
 
-# ------------------------------
-# Configuration
-# ------------------------------
-usage_count = 0
-DAILY_LIMIT = 10
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
 
-# ------------------------------
-# Models
-# ------------------------------
-class CalculatorInput(BaseModel):
-    a: float
-    b: float
+def validate_numbers(a, b):
+    if not (-1000 <= a <= 1000 and -1000 <= b <= 1000):
+        raise HTTPException(status_code=400, detail="Inputs must be between -1000 and 1000.")
 
-# ------------------------------
-# Helper Function
-# ------------------------------
-def check_limit():
-    global usage_count
-    if usage_count >= DAILY_LIMIT:
-        print("⚠️ API usage limit reached! Notify admin or client.")  # Notification in console
-        raise HTTPException(status_code=403, detail="Daily API limit reached! Please try again tomorrow.")
-    usage_count += 1
+def validate_user(user_id: str):
+    try:
+        # check_user increments usage and returns remaining credits
+        remaining = check_user(user_id)
+        return remaining
+    except Exception as e:
+        raise HTTPException(status_code=403, detail=str(e))
 
-# ------------------------------
-# API Endpoints
-# ------------------------------
-
+# ✅ ADDITION Endpoint
 @app.post("/add")
-def add_numbers(data: CalculatorInput):
-    check_limit()
-    result = data.a + data.b
-    return {
-        "operation": "addition",
-        "a": data.a,
-        "b": data.b,
-        "result": result,
-        "remaining_credits": DAILY_LIMIT - usage_count
-    }
+@limiter.limit("10/minute")  # Optional rate limit
+async def add(numbers: Numbers, request: Request, x_user_id: str = Header(...)):
+    remaining = validate_user(x_user_id)
+    validate_numbers(numbers.a, numbers.b)
 
+    result = numbers.a + numbers.b
+    log_request(x_user_id, "/add", "POST", numbers.dict(), {"result": result}, remaining)
+
+    return {"result": result, "remaining_credits": remaining}
+
+# ✅ SUBTRACTION Endpoint
 @app.post("/subtract")
-def subtract_numbers(data: CalculatorInput):
-    check_limit()
-    result = data.a - data.b
-    return {
-        "operation": "subtraction",
-        "a": data.a,
-        "b": data.b,
-        "result": result,
-        "remaining_credits": DAILY_LIMIT - usage_count
-    }
+@limiter.limit("10/minute")  # Optional rate limit
+async def subtract(numbers: Numbers, request: Request, x_user_id: str = Header(...)):
+    remaining = validate_user(x_user_id)
+    validate_numbers(numbers.a, numbers.b)
 
-@app.get("/usage")
-def get_usage():
+    result = numbers.a - numbers.b
+    log_request(x_user_id, "/subtract", "POST", numbers.dict(), {"result": result}, remaining)
+
+    return {"result": result, "remaining_credits": remaining}
+
+# ✅ CREDITS Endpoint (unchanged)
+@app.get("/credits")
+async def get_credits(x_user_id: str = Header(...)):
+    if x_user_id not in USAGE:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    reset_daily_credits(x_user_id)
+    usage = USAGE[x_user_id]
+    limit = USERS[x_user_id]["limit"]
+
     return {
-        "total_used": usage_count,
-        "remaining": DAILY_LIMIT - usage_count
+        "user_id": x_user_id,
+        "subscription": USERS[x_user_id]["subscription"],
+        "credits_used_today": usage["credits_used"],
+        "credits_remaining": limit - usage["credits_used"],
+        "daily_limit": limit,
+        "date": str(usage["date"])
     }
